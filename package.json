@@ -2,21 +2,25 @@
   "name": "zip-content-viewer",
   "version": "1.0.0",
   "description": "A WordPress block for viewing ZIP file contents",
-  "main": "index.js",
+  "main": "build/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "wp-scripts build",
-    "start": "wp-scripts start",
-    "lint:js": "wp-scripts lint-js",
-    "lint:css": "wp-scripts lint-style"
-  },
+		"build": "wp-scripts build --blocks-manifest",
+		"format": "wp-scripts format",
+		"lint:css": "wp-scripts lint-style",
+		"lint:js": "wp-scripts lint-js",
+		"packages-update": "wp-scripts packages-update",
+		"plugin-zip": "wp-scripts plugin-zip",
+		"start": "wp-scripts start --blocks-manifest"
+	},
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "dependencies": {
+		"@wordpress/block-editor": "latest",
+		"@wordpress/blocks": "latest",
+		"@wordpress/i18n": "latest"
+	},
   "devDependencies": {
-    "@wordpress/blocks": "latest",
-    "@wordpress/scripts": "latest",
-    "sass": "latest"
+    "@wordpress/scripts": "latest"
   }
 }
