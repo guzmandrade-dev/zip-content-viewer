@@ -1,0 +1,44 @@
+
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "telex/zip-content-viewer",
+	"version": "0.1.0",
+	"title": "ZIP Content Viewer",
+	"category": "media",
+	"icon": "media-archive",
+	"description": "Upload a ZIP file, extract it, and display HTML content in an iframe.",
+	"example": {},
+	"attributes": {
+		"folderName": {
+			"type": "string",
+			"default": ""
+		},
+		"baseUrl": {
+			"type": "string",
+			"default": ""
+		},
+		"selectedFile": {
+			"type": "string",
+			"default": ""
+		},
+		"htmlFiles": {
+			"type": "array",
+			"default": []
+		},
+		"iframeHeight": {
+			"type": "string",
+			"default": "600px"
+		}
+	},
+	"supports": {
+		"html": false,
+		"align": ["wide", "full"]
+	},
+	"textdomain": "zip-content-viewer",
+	"editorScript": "file:./index.js",
+	"editorStyle": "file:./index.css",
+	"style": "file:./style-index.css",
+	"render": "file:./render.php"
+}
+  

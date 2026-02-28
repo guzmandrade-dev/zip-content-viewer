@@ -1,0 +1,24 @@
+
+/**
+ * The following styles get applied inside the editor only.
+ */
+
+.wp-block-telex-zip-content-viewer {
+	.zip-upload-container {
+		text-align: center;
+		padding: 20px;
+	}
+	
+	.zip-viewer-preview {
+		position: relative;
+		min-height: 400px;
+		background: #f0f0f0;
+		border: 1px solid #ddd;
+		border-radius: 2px;
+		
+		iframe {
+			display: block;
+		}
+	}
+}
+	
