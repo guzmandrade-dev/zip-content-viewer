@@ -1,0 +1,589 @@
+<?xml version="1.0"?><artefact xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="artefact.xsd" name="ZIP Content Viewer" slug="zip-content-viewer" type="code-package" schemaVersion="2">
+  <file path="readme.txt">
+    <description>This file contains the readme information for the block. It is used to provide information about the block, its usage, and any other relevant details.</description>
+    <content><![CDATA[
+=== ZIP Content Viewer ===
+
+Contributors:      WordPress Telex
+Tags:              block, zip, iframe, file upload
+Tested up to:      6.8
+Stable tag:        0.1.0
+License:           GPLv2 or later
+License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+A block that extracts ZIP files and displays HTML content in an iframe.
+
+== Description ==
+
+The ZIP Content Viewer block allows you to upload ZIP files containing HTML projects, extract them to your WordPress uploads directory, and display the selected HTML file in an iframe on your site.
+
+Features:
+* Upload ZIP files directly in the block editor
+* Automatic extraction to wp-content/uploads
+* Browse extracted files and select an HTML file to display
+* Responsive iframe rendering on the frontend
+* Clean file management interface
+
+Perfect for embedding HTML5 games, interactive presentations, documentation sites, or any self-contained HTML projects.
+
+== Installation ==
+
+1. Upload the plugin files to the `/wp-content/plugins/zip-content-viewer` directory, or install the plugin through the WordPress plugins screen directly.
+2. Activate the plugin through the 'Plugins' screen in WordPress
+3. Add the ZIP Content Viewer block to any post or page
+4. Upload your ZIP file and select an HTML file to display
+
+== Frequently Asked Questions ==
+
+= What file types are supported? =
+
+The block accepts ZIP files containing HTML, CSS, JavaScript, images, and other web assets. You must select an HTML file as the entry point for display.
+
+= Where are the files stored? =
+
+Extracted files are stored in wp-content/uploads/zip-extracts/ with a folder name based on your ZIP file.
+
+= Can I change the displayed HTML file? =
+
+Yes, you can select a different HTML file from the extracted contents at any time in the block editor.
+
+= What happens if I upload a new ZIP file? =
+
+The previous extraction will be replaced with the new ZIP file's contents.
+
+== Screenshots ==
+
+1. Block interface showing ZIP upload and file selection
+2. Frontend display with iframe rendering HTML content
+
+== Changelog ==
+
+= 0.1.0 =
+* Initial release
+* ZIP file upload and extraction
+* HTML file selection interface
+* Iframe rendering on frontend
+
+== Support ==
+
+For issues or feature requests, please contact WordPress Telex support.
+]]></content>
+  </file>
+  <file path="zip-content-viewer.php">
+    <description>This file contains the block registration code in the form of a single block plugin. Any other plugin related functionality should be added to this file. All block rendering functionality should go to the `render.php` file.</description>
+    <content><![CDATA[<?php
+/**
+ * Plugin Name:       ZIP Content Viewer
+ * Description:       A block that extracts ZIP files and displays HTML content in an iframe.
+ * Version:           0.1.0
+ * Requires at least: 6.1
+ * Requires PHP:      7.4
+ * Author:            WordPress Telex
+ * License:           GPLv2 or later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain:       zip-content-viewer
+ *
+ * @package TelexZipContentViewer
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit; // Exit if accessed directly.
+}
+
+/**
+ * Registers the block using the metadata loaded from the `block.json` file.
+ */
+function telex_zip_content_viewer_block_init() {
+	register_block_type( __DIR__ . '/build/' );
+}
+add_action( 'init', 'telex_zip_content_viewer_block_init' );
+
+/**
+ * Handle ZIP file upload via AJAX
+ */
+function telex_zip_content_viewer_upload_zip() {
+	check_ajax_referer( 'zip_upload_nonce', 'nonce' );
+	
+	if ( ! current_user_can( 'upload_files' ) ) {
+		wp_send_json_error( array( 'message' => 'Insufficient permissions' ) );
+	}
+	
+	if ( empty( $_FILES['zip_file'] ) ) {
+		wp_send_json_error( array( 'message' => 'No file uploaded' ) );
+	}
+	
+	$file = $_FILES['zip_file'];
+	
+	// Validate file type
+	$file_type = wp_check_filetype( $file['name'] );
+	if ( $file_type['ext'] !== 'zip' ) {
+		wp_send_json_error( array( 'message' => 'Only ZIP files are allowed' ) );
+	}
+	
+	// Create upload directory
+	$upload_dir = wp_upload_dir();
+	$extract_base = $upload_dir['basedir'] . '/zip-extracts/';
+	
+	if ( ! file_exists( $extract_base ) ) {
+		wp_mkdir_p( $extract_base );
+	}
+	
+	// Generate folder name from ZIP file
+	$folder_name = sanitize_file_name( pathinfo( $file['name'], PATHINFO_FILENAME ) );
+	$extract_path = $extract_base . $folder_name;
+	
+	// Remove existing folder if it exists
+	if ( file_exists( $extract_path ) ) {
+		telex_zip_content_viewer_delete_directory( $extract_path );
+	}
+	
+	wp_mkdir_p( $extract_path );
+	
+	// Extract ZIP file
+	$zip = new ZipArchive();
+	if ( $zip->open( $file['tmp_name'] ) === true ) {
+		$zip->extractTo( $extract_path );
+		$zip->close();
+		
+		// Find HTML files
+		$html_files = telex_zip_content_viewer_find_html_files( $extract_path );
+		
+		if ( empty( $html_files ) ) {
+			telex_zip_content_viewer_delete_directory( $extract_path );
+			wp_send_json_error( array( 'message' => 'No HTML files found in ZIP' ) );
+		}
+		
+		$relative_url = $upload_dir['baseurl'] . '/zip-extracts/' . $folder_name;
+		
+		wp_send_json_success( array(
+			'folder' => $folder_name,
+			'path' => $extract_path,
+			'url' => $relative_url,
+			'files' => $html_files
+		) );
+	} else {
+		wp_send_json_error( array( 'message' => 'Failed to extract ZIP file' ) );
+	}
+}
+add_action( 'wp_ajax_telex_zip_upload', 'telex_zip_content_viewer_upload_zip' );
+
+/**
+ * Find HTML files in directory
+ */
+function telex_zip_content_viewer_find_html_files( $dir ) {
+	$html_files = array();
+	$iterator = new RecursiveIteratorIterator(
+		new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS ),
+		RecursiveIteratorIterator::SELF_FIRST
+	);
+	
+	foreach ( $iterator as $file ) {
+		if ( $file->isFile() && preg_match( '/\.html?$/i', $file->getFilename() ) ) {
+			$relative_path = str_replace( $dir . '/', '', $file->getPathname() );
+			$html_files[] = $relative_path;
+		}
+	}
+	
+	return $html_files;
+}
+
+/**
+ * Delete directory recursively
+ */
+function telex_zip_content_viewer_delete_directory( $dir ) {
+	if ( ! file_exists( $dir ) ) {
+		return;
+	}
+	
+	$files = array_diff( scandir( $dir ), array( '.', '..' ) );
+	foreach ( $files as $file ) {
+		$path = $dir . '/' . $file;
+		is_dir( $path ) ? telex_zip_content_viewer_delete_directory( $path ) : unlink( $path );
+	}
+	rmdir( $dir );
+}
+
+/**
+ * Enqueue block editor assets
+ */
+function telex_zip_content_viewer_enqueue_editor_assets() {
+	wp_localize_script(
+		'telex-zip-content-viewer-editor-script',
+		'telexZipViewer',
+		array(
+			'nonce' => wp_create_nonce( 'zip_upload_nonce' ),
+			'ajaxUrl' => admin_url( 'admin-ajax.php' )
+		)
+	);
+}
+add_action( 'enqueue_block_editor_assets', 'telex_zip_content_viewer_enqueue_editor_assets' );
+]]></content>
+  </file>
+  <file path="src/block.json">
+    <description>This file contains metadata about the block including its name, title, category, icon, and other properties.</description>
+    <content><![CDATA[
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "telex/zip-content-viewer",
+	"version": "0.1.0",
+	"title": "ZIP Content Viewer",
+	"category": "media",
+	"icon": "media-archive",
+	"description": "Upload a ZIP file, extract it, and display HTML content in an iframe.",
+	"example": {},
+	"attributes": {
+		"folderName": {
+			"type": "string",
+			"default": ""
+		},
+		"baseUrl": {
+			"type": "string",
+			"default": ""
+		},
+		"selectedFile": {
+			"type": "string",
+			"default": ""
+		},
+		"htmlFiles": {
+			"type": "array",
+			"default": []
+		},
+		"iframeHeight": {
+			"type": "string",
+			"default": "600px"
+		}
+	},
+	"supports": {
+		"html": false,
+		"align": ["wide", "full"]
+	},
+	"textdomain": "zip-content-viewer",
+	"editorScript": "file:./index.js",
+	"editorStyle": "file:./index.css",
+	"style": "file:./style-index.css",
+	"render": "file:./render.php"
+}
+  ]]></content>
+  </file>
+  <file path="src/index.js">
+    <description>This file registers the block, specifies the edit and save functions, and loads the block's metadata</description>
+    <content><![CDATA[
+/**
+ * Registers a new block provided a unique name and an object defining its behavior.
+ *
+ * @see https://developer.wordpress.org/block-editor/reference-guides/block-api/block-registration/
+ */
+import { registerBlockType } from '@wordpress/blocks';
+
+/**
+ * Lets webpack process CSS, SASS or SCSS files referenced in JavaScript files.
+ * All files containing `style` keyword are bundled together. The code used
+ * gets applied both to the front of your site and to the editor.
+ *
+ * @see https://www.npmjs.com/package/@wordpress/scripts#using-css
+ */
+import './style.scss';
+
+/**
+ * Internal dependencies
+ */
+import Edit from './edit';
+import metadata from './block.json';
+
+/**
+ * Every block starts by registering a new block type definition.
+ *
+ * @see https://developer.wordpress.org/block-editor/reference-guides/block-api/block-registration/
+ */
+registerBlockType( metadata.name, {
+	/**
+	 * @see ./edit.js
+	 */
+	edit: Edit,
+} );
+	]]></content>
+  </file>
+  <file path="src/edit.js">
+    <description>This file contains the edit function for the block which is responsible for rendering the block in the editor.</description>
+    <content><![CDATA[/**
+ * Retrieves the translation of text.
+ *
+ * @see https://developer.wordpress.org/block-editor/reference-guides/packages/packages-i18n/
+ */
+import { __ } from '@wordpress/i18n';
+
+/**
+ * React hook that is used to mark the block wrapper element.
+ * It provides all the necessary props like the class name.
+ *
+ * @see https://developer.wordpress.org/block-editor/reference-guides/packages/packages-block-editor/#useblockprops
+ */
+import { useBlockProps, InspectorControls } from '@wordpress/block-editor';
+
+import { 
+	PanelBody, 
+	Button, 
+	SelectControl,
+	Placeholder,
+	Spinner,
+	Notice,
+	TextControl
+} from '@wordpress/components';
+
+import { useState, useRef } from '@wordpress/element';
+import { upload } from '@wordpress/icons';
+
+/**
+ * Lets webpack process CSS, SASS or SCSS files referenced in JavaScript files.
+ * Those files can contain any CSS code that gets applied to the editor.
+ *
+ * @see https://www.npmjs.com/package/@wordpress/scripts#using-css
+ */
+import './editor.scss';
+
+/**
+ * The edit function describes the structure of your block in the context of the
+ * editor. This represents what the editor will render when the block is used.
+ *
+ * @see https://developer.wordpress.org/block-editor/reference-guides/block-api/block-edit-save/#edit
+ *
+ * @param {Object} props - Block props
+ * @return {Element} Element to render.
+ */
+export default function Edit( { attributes, setAttributes } ) {
+	const { folderName, baseUrl, selectedFile, htmlFiles, iframeHeight } = attributes;
+	const [ isUploading, setIsUploading ] = useState( false );
+	const [ error, setError ] = useState( '' );
+	const fileInputRef = useRef( null );
+
+	const handleFileUpload = ( event ) => {
+		const file = event.target.files[0];
+		if ( ! file ) {
+			return;
+		}
+
+		setIsUploading( true );
+		setError( '' );
+
+		const formData = new FormData();
+		formData.append( 'action', 'telex_zip_upload' );
+		formData.append( 'nonce', window.telexZipViewer.nonce );
+		formData.append( 'zip_file', file );
+
+		fetch( window.telexZipViewer.ajaxUrl, {
+			method: 'POST',
+			body: formData,
+		} )
+			.then( ( response ) => response.json() )
+			.then( ( data ) => {
+				setIsUploading( false );
+				if ( data.success ) {
+					setAttributes( {
+						folderName: data.data.folder,
+						baseUrl: data.data.url,
+						htmlFiles: data.data.files,
+						selectedFile: data.data.files[0] || '',
+					} );
+				} else {
+					setError( data.data.message || __( 'Upload failed', 'zip-content-viewer' ) );
+				}
+			} )
+			.catch( () => {
+				setIsUploading( false );
+				setError( __( 'Upload failed', 'zip-content-viewer' ) );
+			} );
+	};
+
+	const blockProps = useBlockProps( {
+		className: 'wp-block-telex-zip-content-viewer',
+	} );
+
+	if ( ! folderName || ! selectedFile ) {
+		return (
+			<div { ...blockProps }>
+				<Placeholder
+					icon={ upload }
+					label={ __( 'ZIP Content Viewer', 'zip-content-viewer' ) }
+					instructions={ __( 'Upload a ZIP file containing HTML content', 'zip-content-viewer' ) }
+				>
+					{ error && (
+						<Notice status="error" isDismissible={ false }>
+							{ error }
+						</Notice>
+					) }
+					{ isUploading ? (
+						<Spinner />
+					) : (
+						<div className="zip-upload-container">
+							<Button
+								variant="primary"
+								onClick={ () => fileInputRef.current?.click() }
+							>
+								{ __( 'Upload ZIP File', 'zip-content-viewer' ) }
+							</Button>
+							<input
+								ref={ fileInputRef }
+								type="file"
+								accept=".zip"
+								style={ { display: 'none' } }
+								onChange={ handleFileUpload }
+							/>
+						</div>
+					) }
+				</Placeholder>
+			</div>
+		);
+	}
+
+	return (
+		<>
+			<InspectorControls>
+				<PanelBody title={ __( 'ZIP Content Settings', 'zip-content-viewer' ) }>
+					<SelectControl
+						label={ __( 'Select HTML File', 'zip-content-viewer' ) }
+						value={ selectedFile }
+						options={ htmlFiles.map( ( file ) => ( {
+							label: file,
+							value: file,
+						} ) ) }
+						onChange={ ( value ) => setAttributes( { selectedFile: value } ) }
+					/>
+					<TextControl
+						label={ __( 'Iframe Height', 'zip-content-viewer' ) }
+						value={ iframeHeight }
+						onChange={ ( value ) => setAttributes( { iframeHeight: value } ) }
+						help={ __( 'e.g., 600px or 100vh', 'zip-content-viewer' ) }
+					/>
+					<Button
+						variant="secondary"
+						isDestructive
+						onClick={ () => {
+							setAttributes( {
+								folderName: '',
+								baseUrl: '',
+								selectedFile: '',
+								htmlFiles: [],
+							} );
+						} }
+					>
+						{ __( 'Upload New ZIP', 'zip-content-viewer' ) }
+					</Button>
+				</PanelBody>
+			</InspectorControls>
+			<div { ...blockProps }>
+				<div className="zip-viewer-editor-notice">
+					<p className="zip-viewer-file-info">
+						<strong>{ __( 'ZIP Content Viewer', 'zip-content-viewer' ) }</strong>
+					</p>
+					<p className="zip-viewer-selected-file">
+						{ __( 'Selected file:', 'zip-content-viewer' ) } <code>{ selectedFile }</code>
+					</p>
+					<p className="zip-viewer-preview-note">
+						{ __( 'The iframe will be displayed on the frontend', 'zip-content-viewer' ) }
+					</p>
+				</div>
+			</div>
+		</>
+	);
+}]]></content>
+  </file>
+  <file path="src/save.js">
+    <description>This file contains the save function for the block which is responsible for creating the static result of rendering the block on the client to display the saved result on the front end.</description>
+    <content><![CDATA[
+	]]></content>
+  </file>
+  <file path="src/style.scss">
+    <description>This file contains styles for the block in the front end.</description>
+    <content><![CDATA[
+/**
+ * The following styles get applied both on the front of your site
+ * and in the editor.
+ */
+
+.wp-block-telex-zip-content-viewer {
+	margin: 0;
+	
+	.zip-viewer-iframe {
+		width: 100%;
+		border: none;
+		display: block;
+	}
+}
+	]]></content>
+  </file>
+  <file path="src/editor.scss">
+    <description>This file contains styles for the block in the editor.</description>
+    <content><![CDATA[
+/**
+ * The following styles get applied inside the editor only.
+ */
+
+.wp-block-telex-zip-content-viewer {
+	.zip-upload-container {
+		text-align: center;
+		padding: 20px;
+	}
+	
+	.zip-viewer-preview {
+		position: relative;
+		min-height: 400px;
+		background: #f0f0f0;
+		border: 1px solid #ddd;
+		border-radius: 2px;
+		
+		iframe {
+			display: block;
+		}
+	}
+}
+	]]></content>
+  </file>
+  <file path="src/view.js">
+    <description>This file contains the view function for the block which is responsible for rendering interactive behaviors of the block on the front end.</description>
+    <content><![CDATA[
+/**
+ * Frontend JavaScript for ZIP Content Viewer
+ */
+
+document.addEventListener( 'DOMContentLoaded', function() {
+	const iframes = document.querySelectorAll( '.wp-block-telex-zip-content-viewer iframe' );
+	
+	iframes.forEach( function( iframe ) {
+		// Add responsive handling if needed
+		iframe.addEventListener( 'load', function() {
+			// Iframe loaded successfully
+		} );
+	} );
+} );
+	]]></content>
+  </file>
+  <file path="src/render.php">
+    <description>This file contains the render callback function for the block, which is responsible for rendering the block content on the front end.</description>
+    <content><![CDATA[<?php
+/**
+ * @see https://github.com/WordPress/gutenberg/blob/trunk/docs/reference-guides/block-api/block-metadata.md#render
+ */
+
+if ( empty( $attributes['folderName'] ) || empty( $attributes['selectedFile'] ) ) {
+	return '';
+}
+
+$base_url = esc_url( $attributes['baseUrl'] );
+$selected_file = esc_attr( $attributes['selectedFile'] );
+$iframe_src = $base_url . '/' . $selected_file;
+$iframe_height = ! empty( $attributes['iframeHeight'] ) ? esc_attr( $attributes['iframeHeight'] ) : '600px';
+
+$wrapper_attributes = get_block_wrapper_attributes();
+?>
+<div <?php echo $wrapper_attributes; ?>>
+	<iframe 
+		class="zip-viewer-iframe" 
+		src="<?php echo $iframe_src; ?>" 
+		style="height: <?php echo $iframe_height; ?>;"
+		title="<?php esc_attr_e( 'ZIP Content', 'zip-content-viewer' ); ?>"
+		loading="lazy"
+	></iframe>
+</div>
+]]></content>
+  </file>
+</artefact>
