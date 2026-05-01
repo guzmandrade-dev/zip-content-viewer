@@ -1,6 +1,6 @@
 {
   "name": "zip-content-viewer",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "A WordPress block for viewing ZIP file contents",
   "main": "build/index.js",
   "scripts": {
@@ -12,15 +12,22 @@
 		"plugin-zip": "wp-scripts plugin-zip",
 		"start": "wp-scripts start --blocks-manifest"
 	},
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "wordpress",
+    "block",
+    "zip",
+    "iframe",
+    "gutenberg"
+  ],
+  "author": "WordPress Telex",
+  "license": "GPL-2.0-or-later",
   "dependencies": {
-		"@wordpress/block-editor": "latest",
-		"@wordpress/blocks": "latest",
-		"@wordpress/i18n": "latest"
+		"@wordpress/block-editor": "^14.0.0",
+		"@wordpress/blocks": "^13.0.0",
+		"@wordpress/components": "^28.0.0",
+		"@wordpress/i18n": "^5.0.0"
 	},
   "devDependencies": {
-    "@wordpress/scripts": "latest"
+    "@wordpress/scripts": "^28.0.0"
   }
 }

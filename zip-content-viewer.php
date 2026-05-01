@@ -26,6 +26,96 @@ function telex_zip_content_viewer_block_init() {
 add_action( 'init', 'telex_zip_content_viewer_block_init' );
 
 /**
+ * Validate ZIP entries for security (prevent ZIP Slip and symlink attacks)
+ *
+ * @param ZipArchive $zip         The ZIP archive object.
+ * @param string     $extract_path The target extraction directory.
+ * @return true|WP_Error True on success, WP_Error on failure.
+ */
+function telex_zip_content_viewer_validate_zip_entries( $zip, $extract_path ) {
+	$max_file_size  = 50 * MB_IN_BYTES; // 50MB limit per file
+	$max_total_size = 200 * MB_IN_BYTES; // 200MB total limit
+	$max_file_count = 500;
+	$total_size     = 0;
+
+	if ( $zip->numFiles > $max_file_count ) {
+		return new WP_Error( 'zip_too_many_files', sprintf( 'ZIP contains too many files (max: %d)', $max_file_count ) );
+	}
+	
+	for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+		$entry      = $zip->statIndex( $i );
+		$entry_name = $entry['name'];
+
+		// Skip empty names
+		if ( empty( $entry_name ) ) {
+			continue;
+		}
+		
+		// Block absolute paths
+		if ( strpos( $entry_name, '/' ) === 0 || strpos( $entry_name, '\\' ) === 0 ) {
+			return new WP_Error( 'zip_invalid_path', 'ZIP contains absolute paths' );
+		}
+		
+		// Block path traversal attempts
+		if ( strpos( $entry_name, '..' ) !== false ) {
+			return new WP_Error( 'zip_path_traversal', 'ZIP contains path traversal attempts' );
+		}
+		
+		// Block null bytes
+		if ( strpos( $entry_name, "\0" ) !== false ) {
+			return new WP_Error( 'zip_null_byte', 'ZIP contains null bytes in paths' );
+		}
+		
+		// Check file size
+		if ( $entry['size'] > $max_file_size ) {
+			return new WP_Error( 'zip_file_too_large', sprintf( 'File %s exceeds size limit', $entry_name ) );
+		}
+		
+		$total_size += $entry['size'];
+		if ( $total_size > $max_total_size ) {
+			return new WP_Error( 'zip_too_large', 'Total ZIP size exceeds limit' );
+		}
+		
+		// Validate final path stays within extraction directory
+		$safe_path = telex_zip_content_viewer_sanitize_zip_path( $entry_name, $extract_path );
+		if ( false === $safe_path ) {
+			return new WP_Error( 'zip_invalid_path', 'Invalid file path in ZIP' );
+		}
+	}
+	
+	return true;
+}
+
+/**
+ * Sanitize ZIP entry path and ensure it stays within target directory
+ *
+ * @param string $entry_name   The ZIP entry name.
+ * @param string $extract_path The target extraction directory.
+ * @return string|false Safe absolute path or false if invalid.
+ */
+function telex_zip_content_viewer_sanitize_zip_path( $entry_name, $extract_path ) {
+	// Normalize path separators
+	$entry_name = str_replace( '\\', '/', $entry_name );
+
+	// Remove leading slashes
+	$entry_name = ltrim( $entry_name, '/' );
+
+	// Build full path
+	$full_path = $extract_path . '/' . $entry_name;
+
+	// Normalize and resolve real path
+	$normalized_path       = wp_normalize_path( $full_path );
+	$extract_normalized    = wp_normalize_path( $extract_path );
+
+	// Ensure path is within extraction directory
+	if ( strpos( $normalized_path, $extract_normalized . '/' ) !== 0 && $normalized_path !== $extract_normalized ) {
+		return false;
+	}
+	
+	return $normalized_path;
+}
+
+/**
  * Handle ZIP file upload via AJAX
  */
 function telex_zip_content_viewer_upload_zip() {
@@ -40,57 +130,117 @@ function telex_zip_content_viewer_upload_zip() {
 	}
 	
 	$file = $_FILES['zip_file'];
-	
-	// Validate file type
-	$file_type = wp_check_filetype( $file['name'] );
-	if ( $file_type['ext'] !== 'zip' ) {
+
+	// Check for upload errors
+	if ( UPLOAD_ERR_OK !== $file['error'] ) {
+		wp_send_json_error( array( 'message' => 'File upload error occurred' ) );
+	}
+
+	// Validate file size (WordPress max_upload_size)
+	$max_upload_size = wp_max_upload_size();
+	if ( $file['size'] > $max_upload_size ) {
+		wp_send_json_error( array( 'message' => 'File exceeds maximum upload size' ) );
+	}
+
+	// Validate file type by extension and MIME
+	$file_type = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'], $file['type'] );
+	if ( 'zip' !== $file_type['ext'] ) {
 		wp_send_json_error( array( 'message' => 'Only ZIP files are allowed' ) );
 	}
 	
-	// Create upload directory
-	$upload_dir = wp_upload_dir();
-	$extract_base = $upload_dir['basedir'] . '/zip-extracts/';
+	// Additional MIME type validation
+	$allowed_mime_types = array( 'application/zip', 'application/x-zip-compressed' );
+	if ( ! in_array( $file_type['type'], $allowed_mime_types, true ) ) {
+		wp_send_json_error( array( 'message' => 'Invalid file type' ) );
+	}
 	
+	// Create upload directory
+	$upload_dir     = wp_upload_dir();
+	$extract_base   = $upload_dir['basedir'] . '/zip-extracts/';
+
 	if ( ! file_exists( $extract_base ) ) {
 		wp_mkdir_p( $extract_base );
 	}
-	
-	// Generate folder name from ZIP file
-	$folder_name = sanitize_file_name( pathinfo( $file['name'], PATHINFO_FILENAME ) );
-	$extract_path = $extract_base . $folder_name;
-	
-	// Remove existing folder if it exists
-	if ( file_exists( $extract_path ) ) {
-		telex_zip_content_viewer_delete_directory( $extract_path );
+
+	// Generate unique folder name from ZIP file with timestamp and random suffix
+	$base_folder_name = sanitize_file_name( pathinfo( $file['name'], PATHINFO_FILENAME ) );
+	$unique_suffix    = wp_generate_password( 6, false );
+	$folder_name      = $base_folder_name . '_' . time() . '_' . $unique_suffix;
+	$extract_path     = $extract_base . $folder_name;
+
+	wp_mkdir_p( $extract_path );
+
+	// Extract ZIP file with security validation
+	$zip               = new ZipArchive();
+	$zip_open_result   = $zip->open( $file['tmp_name'] );
+
+	if ( true !== $zip_open_result ) {
+		wp_send_json_error( array( 'message' => 'Failed to open ZIP file' ) );
 	}
 	
-	wp_mkdir_p( $extract_path );
-	
-	// Extract ZIP file
-	$zip = new ZipArchive();
-	if ( $zip->open( $file['tmp_name'] ) === true ) {
-		$zip->extractTo( $extract_path );
+	// Validate ZIP entries before extraction (prevent ZIP Slip)
+	$validation_result = telex_zip_content_viewer_validate_zip_entries( $zip, $extract_path );
+	if ( is_wp_error( $validation_result ) ) {
 		$zip->close();
-		
-		// Find HTML files
-		$html_files = telex_zip_content_viewer_find_html_files( $extract_path );
-		
-		if ( empty( $html_files ) ) {
-			telex_zip_content_viewer_delete_directory( $extract_path );
-			wp_send_json_error( array( 'message' => 'No HTML files found in ZIP' ) );
+		wp_send_json_error( array( 'message' => $validation_result->get_error_message() ) );
+	}
+	
+	// Safe extraction with validated entries
+	$extraction_success = true;
+	for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+		$entry      = $zip->statIndex( $i );
+		$entry_name = $entry['name'];
+
+		// Skip directories
+		if ( '/' === substr( $entry_name, -1 ) ) {
+			continue;
+		}
+
+		// Sanitize path and extract
+		$safe_path = telex_zip_content_viewer_sanitize_zip_path( $entry_name, $extract_path );
+		if ( false === $safe_path ) {
+			$extraction_success = false;
+			break;
 		}
 		
-		$relative_url = $upload_dir['baseurl'] . '/zip-extracts/' . $folder_name;
+		// Create directory if needed
+		$entry_dir = dirname( $safe_path );
+		if ( ! file_exists( $entry_dir ) ) {
+			wp_mkdir_p( $entry_dir );
+		}
 		
-		wp_send_json_success( array(
-			'folder' => $folder_name,
-			'path' => $extract_path,
-			'url' => $relative_url,
-			'files' => $html_files
-		) );
-	} else {
-		wp_send_json_error( array( 'message' => 'Failed to extract ZIP file' ) );
+		// Extract file
+		$content = $zip->getFromIndex( $i );
+		if ( $content === false ) {
+			$extraction_success = false;
+			break;
+		}
+		
+		file_put_contents( $safe_path, $content );
 	}
+	
+	$zip->close();
+	
+	if ( ! $extraction_success ) {
+		telex_zip_content_viewer_delete_directory( $extract_path );
+		wp_send_json_error( array( 'message' => 'Failed to extract ZIP file securely' ) );
+	}
+	
+	// Find HTML files
+	$html_files = telex_zip_content_viewer_find_html_files( $extract_path );
+	
+	if ( empty( $html_files ) ) {
+		telex_zip_content_viewer_delete_directory( $extract_path );
+		wp_send_json_error( array( 'message' => 'No HTML files found in ZIP' ) );
+	}
+	
+	$relative_url = $upload_dir['baseurl'] . '/zip-extracts/' . $folder_name;
+	
+	wp_send_json_success( array(
+		'folder' => $folder_name,
+		'url' => $relative_url,
+		'files' => $html_files
+	) );
 }
 add_action( 'wp_ajax_telex_zip_upload', 'telex_zip_content_viewer_upload_zip' );
 
@@ -115,19 +265,44 @@ function telex_zip_content_viewer_find_html_files( $dir ) {
 }
 
 /**
- * Delete directory recursively
+ * Delete directory recursively with safety checks
+ *
+ * @param string $dir Directory path to delete.
+ * @return bool True on success, false on failure.
  */
 function telex_zip_content_viewer_delete_directory( $dir ) {
-	if ( ! file_exists( $dir ) ) {
-		return;
+	if ( ! file_exists( $dir ) || ! is_dir( $dir ) ) {
+		return false;
+	}
+	
+	// Safety check: ensure path is within wp-content/uploads
+	$upload_dir = wp_upload_dir();
+	$normalized_dir = wp_normalize_path( $dir );
+	$normalized_upload_dir = wp_normalize_path( $upload_dir['basedir'] );
+	
+	if ( strpos( $normalized_dir, $normalized_upload_dir . '/zip-extracts/' ) !== 0 ) {
+		error_log( 'ZIP Content Viewer: Attempted to delete directory outside allowed path: ' . $dir );
+		return false;
+	}
+	
+	// Safety check: prevent deletion of root or important directories
+	$dir_basename = basename( $normalized_dir );
+	if ( in_array( $dir_basename, array( 'uploads', 'wp-content', 'wordpress' ), true ) ) {
+		error_log( 'ZIP Content Viewer: Attempted to delete protected directory: ' . $dir );
+		return false;
 	}
 	
 	$files = array_diff( scandir( $dir ), array( '.', '..' ) );
 	foreach ( $files as $file ) {
 		$path = $dir . '/' . $file;
-		is_dir( $path ) ? telex_zip_content_viewer_delete_directory( $path ) : unlink( $path );
+		if ( is_dir( $path ) ) {
+			telex_zip_content_viewer_delete_directory( $path );
+		} else {
+			unlink( $path );
+		}
 	}
-	rmdir( $dir );
+	
+	return rmdir( $dir );
 }
 
 /**
