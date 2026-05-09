@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Plugin Name:       ZIP Content Viewer
  * Description:       Extracts ZIP files and displays HTML content in an iframe.
@@ -13,7 +14,8 @@
  * @package TelexZipContentViewer
  */
 
-if (! defined('ABSPATH') ) {
+// phpcs:ignore PSR1.Files.SideEffects.FoundWithSymbols
+if (! defined('ABSPATH')) {
     exit; // Exit if accessed directly.
 }
 
@@ -35,11 +37,11 @@ function telex_zip_content_viewer_upload_zip()
 {
     check_ajax_referer('zip_upload_nonce', 'nonce');
 
-    if (! current_user_can('upload_files') ) {
+    if (! current_user_can('upload_files')) {
         wp_send_json_error(array( 'message' => 'Insufficient permissions' ));
     }
 
-    if (empty($_FILES['zip_file']) ) {
+    if (empty($_FILES['zip_file'])) {
         wp_send_json_error(array( 'message' => 'No file uploaded' ));
     }
 
@@ -47,39 +49,39 @@ function telex_zip_content_viewer_upload_zip()
 
     // Validate file type
     $file_type = wp_check_filetype($file['name']);
-    if ($file_type['ext'] !== 'zip' ) {
+    if ($file_type['ext'] !== 'zip') {
         wp_send_json_error(array( 'message' => 'Only ZIP files are allowed' ));
     }
 
     // Create upload directory
-    $upload_dir = wp_upload_dir();
+    $upload_dir   = wp_upload_dir();
     $extract_base = $upload_dir['basedir'] . '/zip-extracts/';
 
-    if (! file_exists($extract_base) ) {
+    if (! file_exists($extract_base)) {
         wp_mkdir_p($extract_base);
     }
 
     // Generate folder name from ZIP file
-    $folder_name = sanitize_file_name(pathinfo($file['name'], PATHINFO_FILENAME));
+    $folder_name  = sanitize_file_name(pathinfo($file['name'], PATHINFO_FILENAME));
     $extract_path = $extract_base . $folder_name;
 
     // Remove existing folder if it exists
-    if (file_exists($extract_path) ) {
+    if (file_exists($extract_path)) {
         telex_zip_content_viewer_delete_directory($extract_path);
     }
 
     wp_mkdir_p($extract_path);
 
-    // Extract ZIP file
+    // Extract ZIP file.
     $zip = new ZipArchive();
-    if ($zip->open($file['tmp_name']) === true ) {
+    if ($zip->open($file['tmp_name']) === true) {
         $zip->extractTo($extract_path);
         $zip->close();
 
-        // Find HTML files
+        // Find HTML files.
         $html_files = telex_zip_content_viewer_find_html_files($extract_path);
 
-        if (empty($html_files) ) {
+        if (empty($html_files)) {
             telex_zip_content_viewer_delete_directory($extract_path);
             wp_send_json_error(array( 'message' => 'No HTML files found in ZIP' ));
         }
@@ -88,10 +90,10 @@ function telex_zip_content_viewer_upload_zip()
 
         wp_send_json_success(
             array(
-            'folder' => $folder_name,
-            'path' => $extract_path,
-            'url' => $relative_url,
-            'files' => $html_files
+                'folder' => $folder_name,
+                'path'   => $extract_path,
+                'url'    => $relative_url,
+                'files'  => $html_files,
             )
         );
     } else {
@@ -103,18 +105,19 @@ add_action('wp_ajax_telex_zip_upload', 'telex_zip_content_viewer_upload_zip');
 /**
  * Find HTML files in directory
  */
-function telex_zip_content_viewer_find_html_files( $dir )
+// phpcs:ignore Squiz.Commenting.FunctionComment.MissingParamTag
+function telex_zip_content_viewer_find_html_files($dir)
 {
     $html_files = array();
-    $iterator = new RecursiveIteratorIterator(
+    $iterator   = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
         RecursiveIteratorIterator::SELF_FIRST
     );
 
-    foreach ( $iterator as $file ) {
-        if ($file->isFile() && preg_match('/\.html?$/i', $file->getFilename()) ) {
+    foreach ($iterator as $file) {
+        if ($file->isFile() && preg_match('/\.html?$/i', $file->getFilename())) {
             $relative_path = str_replace($dir . '/', '', $file->getPathname());
-            $html_files[] = $relative_path;
+            $html_files[]  = $relative_path;
         }
     }
 
@@ -124,14 +127,14 @@ function telex_zip_content_viewer_find_html_files( $dir )
 /**
  * Delete directory recursively
  */
-function telex_zip_content_viewer_delete_directory( $dir )
+function telex_zip_content_viewer_delete_directory($dir)
 {
-    if (! file_exists($dir) ) {
+    if (! file_exists($dir)) {
         return;
     }
 
     $files = array_diff(scandir($dir), array( '.', '..' ));
-    foreach ( $files as $file ) {
+    foreach ($files as $file) {
         $path = $dir . '/' . $file;
         is_dir($path) ? telex_zip_content_viewer_delete_directory($path) : unlink($path);
     }
@@ -147,8 +150,8 @@ function telex_zip_content_viewer_enqueue_editor_assets()
         'telex-zip-content-viewer-editor-script',
         'telexZipViewer',
         array(
-        'nonce' => wp_create_nonce('zip_upload_nonce'),
-        'ajaxUrl' => admin_url('admin-ajax.php')
+            'nonce'   => wp_create_nonce('zip_upload_nonce'),
+            'ajaxUrl' => admin_url('admin-ajax.php'),
         )
     );
 }
